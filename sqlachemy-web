@@ -1,0 +1,53 @@
+                                        web 项目中 SQLAlchemy session 的生命周期管理
+  参考：http://my.oschina.net/lionets/blog/407263
+  
+  假设已有一个 Session 工厂类：
+
+lang:python
+Session = sessionmaker(bind=some_engine)
+那么 session 实例的生命周期可以为：
+
+最短模式 —— 每次请求新建一个 session，用完就 close
+
+lang:python
+@contextmanager
+def get_session_scope():
+    try:
+        s = Session()
+        yield s
+        s.commit()
+    except:
+        s.rollback()
+    finally:
+        s.close()
+这种模式不适合 web 项目或者说其缺点主要在于对 连接池(db pool) 的消耗过快。实际使用中发现，被 close 的 session 的 连接并没有即时返回可用状态。因此在请求频繁时，会出现等待连接的情况。
+
+最长模式 —— 全程使用一个 session
+
+lang:python
+session = Session()
+这种方式更加不适合 web 项目。因为根据 SQLAlchemy 的文档描述：
+
+The Session object is entirely designed to be used in a non-concurrent fashion, which in terms of multithreading means “only in one thread at a time”.
+session 并不是线程安全的。这种并发式的 session 使用会导致错误。
+
+Thread-Local模式 —— 生命周期与 request 同步
+
+lang:python
+@app.before_request
+def init_session():
+    g.session = Session()
+
+@app.tear_down_request
+def close_session():
+    g.session.close()
+这其实才是最适合 web 项目的 session 管理方式。（伪代码中没有写 commit 和 rollback，可自行添加）这样即避免了连接池的过快消耗，又避免了并发问题。这也是 SQLAlchemy 文档中推荐的做法。
+
+实践上更靠谱的一段代码可能是：
+
+lang:python
+from sqlalchemy.orm import scoped_session, sessionmaker
+from flask import g
+
+Session = scoped_session(sessionmaker(bind=some_engine), scopefunc=g._get_current_object)
+更更可靠的一种方法应该是使用官方扩展，如 Flask-SqlAlchemy
